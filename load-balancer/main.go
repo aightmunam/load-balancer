@@ -4,13 +4,22 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync/atomic"
 )
 
-const backendServerAddr string = "http://127.0.0.1:3333"
+var backendServerAddrs = []string{"http://127.0.0.1:3333", "http://127.0.0.1:3334", "http://127.0.0.1:3335"}
+var totalServers uint32 = uint32(len(backendServerAddrs))
+var currentServer uint32 = 0
+
+// Simple server choice based on Round Robin without any weights
+func getEligibleServer() string {
+	atomic.AddUint32(&currentServer, 1)
+	return backendServerAddrs[(currentServer)%totalServers]
+}
 
 func generalHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("Received request at load balancer: 127.0.0.1:8080")
-	response, err := http.Get(backendServerAddr + r.URL.Path + "/")
+	response, err := http.Get(getEligibleServer() + r.URL.Path + "/")
 	if err != nil {
 		fmt.Fprint(w, "Server is down.")
 	}
