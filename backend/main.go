@@ -2,13 +2,25 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 )
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("Served by: ", r.Host)
-	fmt.Println("Received request at /")
+	log.Output(1, "Served by: "+r.Host)
 	fmt.Fprint(w, "Hello from: "+r.Host)
+}
+
+func pingHander(w http.ResponseWriter, r *http.Request) {
+	log.Output(1, "health check for "+r.Host)
+	fmt.Fprint(w, "pong")
+}
+
+func runServer(server *http.Server) {
+	log.Output(1, "Listening at: "+server.Addr)
+	if err := server.ListenAndServe(); err != http.ErrServerClosed {
+		log.Fatalf("ListenAndServe(): %v", err)
+	}
 }
 
 func main() {
@@ -16,6 +28,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", indexHandler)
+	mux.HandleFunc("/ping/", pingHander)
 
 	server_one := &http.Server{
 		Addr:    "127.0.0.1:3333",
@@ -30,18 +43,12 @@ func main() {
 		Handler: mux,
 	}
 
-	go func() {
-		server_one.ListenAndServe()
-		ch <- true
-	}()
-	go func() {
-		server_two.ListenAndServe()
-		ch <- true
-	}()
-	go func() {
-		server_three.ListenAndServe()
-		ch <- true
-	}()
+	for _, server := range []*http.Server{server_one, server_two, server_three} {
+		go func(s *http.Server) {
+			runServer(s)
+			ch <- true
+		}(server)
+	}
 
 	<-ch
 }

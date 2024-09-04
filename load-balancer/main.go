@@ -3,22 +3,48 @@ package main
 import (
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"slices"
 	"sync/atomic"
+	"time"
 )
 
-var backendServerAddrs = []string{"http://127.0.0.1:3333", "http://127.0.0.1:3334", "http://127.0.0.1:3335"}
-var totalServers uint32 = uint32(len(backendServerAddrs))
+var backendServerAddrs = []string{"http://127.0.0.1:3333", "http://127.0.0.1:3334", "http://127.0.0.1:3335", "http://127.0.0.1:8001"}
+
+var availableServers []string = append([]string{}, backendServerAddrs...)
 var currentServer uint32 = 0
 
-// Simple server choice based on Round Robin without any weights
+// Naive Round Robin implementation: Find the next server for each incoming request
 func getEligibleServer() string {
+	var totalServers uint32 = uint32(len(availableServers))
 	atomic.AddUint32(&currentServer, 1)
-	return backendServerAddrs[(currentServer)%totalServers]
+	return availableServers[(currentServer)%totalServers]
+}
+
+// Send request to all servers. If any of the servers is down, make it unavailable to the load balancer.
+// If a server is up and running, make it available to the load balancer.
+func healthCheck() {
+	for index, server := range backendServerAddrs {
+		_, err := http.Get(server + "/ping")
+		isCurrentlyActive := slices.Contains(availableServers, server)
+		if err != nil {
+			if isCurrentlyActive {
+				fmt.Println("Removing server: ", server)
+				availableServers = slices.Delete(availableServers, index, index+1)
+			}
+		} else {
+			if !isCurrentlyActive {
+				fmt.Println("Adding server: ", server)
+				availableServers = append(availableServers, server)
+			}
+		}
+	}
 }
 
 func generalHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("Received request at load balancer: 127.0.0.1:8080")
+	log.Output(1, "Received request at load balancer: "+r.Host)
+
 	response, err := http.Get(getEligibleServer() + r.URL.Path + "/")
 	if err != nil {
 		fmt.Fprint(w, "Server is down.")
@@ -30,7 +56,7 @@ func generalHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer response.Body.Close()
 
-	fmt.Println("Backend server responded with: ", string(body))
+	log.Output(1, "Backend server responded with: "+string(body))
 	fmt.Fprint(w, string(body))
 }
 
@@ -41,6 +67,21 @@ func main() {
 		Addr:    "127.0.0.1:8080",
 		Handler: mux,
 	}
-	fmt.Println("Load balancer is listening requests at 127.0.0.1:8080")
+	log.Output(1, "Load balancer is listening at: "+server.Addr)
+
+	ticker := time.NewTicker(3 * time.Second)
+	quit := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				healthCheck()
+			case <-quit:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+
 	server.ListenAndServe()
 }
